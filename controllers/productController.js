@@ -27,6 +27,15 @@ const toNumber = (value, fallback = 0) => {
   return numberValue;
 };
 
+const toDate = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  const parsedDate = new Date(value);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+};
+
 const updateMissingFields = (product, data) => {
   if (!product.name && data.name) {
     product.name = data.name;
@@ -59,13 +68,13 @@ const addProduct = async (req, res) => {
     const category = cleanString(req.body.category) || 'Uncategorized';
     const quantity = Math.max(toNumber(req.body.quantity), 0);
     const price = Math.max(toNumber(req.body.price), 0);
-    const expiryDate = req.body.expiryDate ? new Date(req.body.expiryDate) : null;
+    const expiryDate = toDate(req.body.expiryDate);
     const normalizedName = normalizeText(name);
 
     if (!name && !barcode) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide a product name or barcode',
+      message: 'Please provide a product name or barcode',
       });
     }
 

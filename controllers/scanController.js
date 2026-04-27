@@ -16,24 +16,58 @@ const cleanString = (value) => {
   return value.trim();
 };
 
+const sanitizeBarcode = (value) =>
+  cleanString(String(value || ''))
+    .replace(/\s+/g, '')
+    .replace(/\D/g, '');
+const isValidBarcode = (value) => /^\d{8,13}$/.test(value);
+
 const scanProduct = async (req, res) => {
   try {
-    const barcode = cleanString(req.body.barcode);
-    const text = cleanString(req.body.text || req.body.name);
-    const normalizedName = normalizeText(text);
+    const originalQuery = String(
+      req.body.query || req.body.barcode || req.body.text || req.body.name || ''
+    );
+    const cleanedQuery = cleanString(originalQuery).replace(/[^\w\s./:-]/g, ' ');
+    const normalizedName = normalizeText(cleanedQuery);
+    const numericQuery = sanitizeBarcode(originalQuery);
 
-    if (!barcode && !normalizedName) {
+    console.log('Scan original query:', originalQuery);
+    console.log('Scan cleaned query:', cleanedQuery);
+    console.log('Scan numeric query:', numericQuery);
+
+    if (!numericQuery && !normalizedName) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide barcode or text to scan',
+        message: 'Please provide a valid search query',
       });
     }
 
-    const searchQuery = barcode
-      ? { user: req.user._id, barcode }
-      : { user: req.user._id, normalizedName };
+    let product = null;
 
-    const product = await Product.findOne(searchQuery);
+    if (numericQuery && isValidBarcode(numericQuery)) {
+      product = await Product.findOne({
+        user: req.user._id,
+        barcode: numericQuery,
+      });
+      console.log('Scan barcode match found:', Boolean(product));
+    }
+
+    if (!product && normalizedName) {
+      product = await Product.findOne({
+        user: req.user._id,
+        normalizedName,
+      });
+      console.log('Scan exact name match found:', Boolean(product));
+    }
+
+    if (!product && normalizedName) {
+      const escapedQuery = normalizedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      product = await Product.findOne({
+        user: req.user._id,
+        normalizedName: { $regex: escapedQuery, $options: 'i' },
+      });
+      console.log('Scan partial name match found:', Boolean(product));
+    }
 
     if (!product) {
       return res.json({

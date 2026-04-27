@@ -12,6 +12,11 @@ const toNumber = (value, fallback = 0) => {
   return numberValue;
 };
 
+const isValidNonEmptyString = (value) =>
+  typeof value === 'string' && value.trim().length > 0;
+const sanitizeBarcode = (value) =>
+  typeof value === 'string' ? value.trim().replace(/\s+/g, '').replace(/\D/g, '') : '';
+
 const startOfToday = () => {
   const date = new Date();
   date.setHours(0, 0, 0, 0);
@@ -48,20 +53,29 @@ const createBill = async (req, res) => {
           user: req.user._id,
         });
       } else if (item.barcode) {
+        const normalizedBarcode = sanitizeBarcode(item.barcode);
         product = await Product.findOne({
-          barcode: item.barcode,
+          barcode: normalizedBarcode,
           user: req.user._id,
         });
       }
 
       const name = product?.name || item.name;
-      const barcode = product?.barcode || item.barcode || '';
+      const barcode = product?.barcode || sanitizeBarcode(item.barcode) || '';
       const price = Math.max(toNumber(item.price, product?.price || 0), 0);
+      console.log('Billing item lookup:', { name, barcode, quantity, price, found: Boolean(product) });
 
-      if (!name) {
+      if (!isValidNonEmptyString(name)) {
         return res.status(400).json({
           success: false,
           message: 'Each bill item needs a product name, productId, or barcode',
+        });
+      }
+
+      if (price <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid price for product: ${String(name).trim()}`,
         });
       }
 
