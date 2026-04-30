@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const { getJwtSecret } = require('../config/env');
+const { sendWhatsAppMessage } = require('../services/whatsappService');
 const User = require('../models/User');
 
 const createToken = (userId) => {
@@ -20,9 +21,29 @@ const formatUser = (user) => {
   };
 };
 
+const notifyLoginAsync = (user) => {
+  if (!user?.mobile) {
+    return;
+  }
+
+  setImmediate(async () => {
+    const loginTime = new Date().toISOString();
+
+    try {
+      await sendWhatsAppMessage(
+        user.mobile,
+        `RetailX login alert for ${user.name || user.email}\nLogin time: ${loginTime}`
+      );
+    } catch (error) {
+      console.error('Login WhatsApp notification failed:', error.message);
+    }
+  });
+};
+
 const registerUser = async (req, res) => {
   try {
-    const { name, shopName, mobile, email, password } = req.body;
+    const { name, shopName, mobile, password } = req.body;
+    const email = String(req.body.email || '').trim().toLowerCase();
 
     if (!name || !shopName || !mobile || !email || !password) {
       return res.status(400).json({
@@ -32,8 +53,8 @@ const registerUser = async (req, res) => {
     }
 
     const existingUser = await User.findOne({
-      $or: [{ email: email.toLowerCase() }, { mobile }],
-    });
+      $or: [{ email }, { mobile }],
+    }).select('_id');
 
     if (existingUser) {
       return res.status(400).json({
@@ -42,8 +63,7 @@ const registerUser = async (req, res) => {
       });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await User.create({
       name,
@@ -69,7 +89,9 @@ const registerUser = async (req, res) => {
 
 const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const requestStart = Date.now();
+    const password = String(req.body.password || '');
+    const email = String(req.body.email || '').trim().toLowerCase();
 
     if (!email || !password) {
       return res.status(400).json({
@@ -78,9 +100,9 @@ const loginUser = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() }).select(
-      '+password'
-    );
+    const user = await User.findOne({ email })
+      .select('+password name shopName mobile email')
+      .lean();
 
     if (!user) {
       return res.status(401).json({
@@ -97,6 +119,9 @@ const loginUser = async (req, res) => {
         message: 'Invalid email or password',
       });
     }
+
+    console.log('Login request duration:', Date.now() - requestStart, 'ms');
+    notifyLoginAsync(user);
 
     return res.json({
       success: true,

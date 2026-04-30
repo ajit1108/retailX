@@ -87,5 +87,6 @@ const billSchema = new mongoose.Schema(
 );
 
 billSchema.index({ user: 1, createdAt: -1 });
+billSchema.index({ user: 1, status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Bill', billSchema);

@@ -163,6 +163,46 @@ const getProducts = async (req, res) => {
   }
 };
 
+const searchProducts = async (req, res) => {
+  try {
+    const query = cleanString(String(req.query.q || req.query.query || ''));
+    const normalizedQuery = normalizeText(query);
+
+    if (!normalizedQuery) {
+      return res.json({
+        success: true,
+        count: 0,
+        products: [],
+      });
+    }
+
+    const escapedQuery = normalizedQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const products = await Product.find({
+      user: req.user._id,
+      $or: [
+        { normalizedName: { $regex: escapedQuery, $options: 'i' } },
+        { barcode: { $regex: escapedQuery, $options: 'i' } },
+      ],
+    })
+      .select('name barcode category price quantity')
+      .sort({ normalizedName: 1, createdAt: 1 })
+      .limit(8)
+      .lean();
+
+    return res.json({
+      success: true,
+      count: products.length,
+      products,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to search products',
+      error: error.message,
+    });
+  }
+};
+
 const getProductByBarcode = async (req, res) => {
   try {
     const product = await Product.findOne({
@@ -293,5 +333,6 @@ module.exports = {
   deleteProduct,
   getProductByBarcode,
   getProducts,
+  searchProducts,
   updateProduct,
 };

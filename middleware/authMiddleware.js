@@ -17,7 +17,9 @@ const protect = async (req, res, next) => {
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, getJwtSecret());
 
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id).select(
+      '_id name shopName mobile email preferences'
+    );
 
     if (!user) {
       return res.status(401).json({

@@ -29,11 +29,10 @@ const getDashboard = async (req, res) => {
       Product.find({
         user: req.user._id,
         quantity: { $lt: LOW_STOCK_THRESHOLD },
-      }).sort({ quantity: 1, createdAt: 1 }),
-      Product.find({ user: req.user._id }).sort({
-        category: 1,
-        createdAt: 1,
-      }),
+      })
+        .select('name quantity')
+        .sort({ quantity: 1, createdAt: 1 })
+        .lean(),
       Bill.find({
         user: req.user._id,
         status: 'completed',
@@ -41,7 +40,9 @@ const getDashboard = async (req, res) => {
           $gte: startOfToday(),
           $lte: endOfToday(),
         },
-      }),
+      })
+        .select('total items createdAt')
+        .lean(),
       Notification.countDocuments({
         user: req.user._id,
         isRead: false,
@@ -79,17 +80,6 @@ const getDashboard = async (req, res) => {
       .sort((a, b) => b.totalSold - a.totalSold)
       .slice(0, 5);
 
-    const productsByCategory = fifoProducts.reduce((groups, product) => {
-      const category = product.category || 'Uncategorized';
-
-      if (!groups[category]) {
-        groups[category] = [];
-      }
-
-      groups[category].push(product);
-      return groups;
-    }, {});
-
     return res.json({
       success: true,
       summary: {
@@ -108,7 +98,6 @@ const getDashboard = async (req, res) => {
         type: 'low_stock',
       })),
       topPerformingItems,
-      productsByCategory,
     });
   } catch (error) {
     return res.status(500).json({

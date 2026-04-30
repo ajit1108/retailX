@@ -109,8 +109,12 @@ const getAnalytics = async (req, res) => {
         user: req.user._id,
         status: 'completed',
         createdAt: { $gte: startDate },
-      }),
-      Product.find({ user: req.user._id }),
+      })
+        .select('total items createdAt')
+        .lean(),
+      Product.find({ user: req.user._id })
+        .select('name category quantity price')
+        .lean(),
     ]);
 
     const salesByDate = {};
@@ -153,7 +157,20 @@ const getAnalytics = async (req, res) => {
       })),
       recentSales: soldProducts,
     };
-    const stockPrediction = await getStockPredictions(predictionPayload);
+    const stockPrediction = await Promise.race([
+      getStockPredictions(predictionPayload),
+      new Promise((resolve) => {
+        setTimeout(
+          () =>
+            resolve({
+              success: false,
+              predictions: [],
+              message: 'ML prediction request timed out',
+            }),
+          1500
+        );
+      }),
+    ]);
 
     return res.json({
       success: true,

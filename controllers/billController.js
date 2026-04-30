@@ -1,6 +1,8 @@
 const Bill = require('../models/Bill');
+const { getWhatsAppConfig } = require('../config/env');
 const Product = require('../models/Product');
 const { createLowStockNotification } = require('../services/notificationService');
+const { sendWhatsAppMessage } = require('../services/whatsappService');
 
 const toNumber = (value, fallback = 0) => {
   const numberValue = Number(value);
@@ -29,10 +31,38 @@ const endOfToday = () => {
   return date;
 };
 
+const normalizeMobile = (value) => String(value || '').replace(/\D/g, '');
+
+const isValidCustomerMobile = (value) => /^[6-9]\d{9}$/.test(normalizeMobile(value));
+
+const formatCurrency = (value) => `Rs ${Number(value || 0).toFixed(2)}`;
+
+const buildBillMessage = (bill) => {
+  const lines = [
+    'RetailX Bill',
+    `Bill ID: ${bill._id}`,
+    `Date: ${new Date(bill.createdAt).toLocaleString('en-IN')}`,
+    'Items:',
+  ];
+
+  bill.items.forEach((item, index) => {
+    lines.push(
+      `${index + 1}. ${item.name} x ${item.quantity} @ ${formatCurrency(item.price)} = ${formatCurrency(item.lineTotal)}`
+    );
+  });
+
+  lines.push(`Subtotal: ${formatCurrency(bill.subtotal)}`);
+  lines.push(`Tax (${Math.round((bill.taxRate || 0) * 100)}%): ${formatCurrency(bill.tax)}`);
+  lines.push(`Total: ${formatCurrency(bill.total)}`);
+
+  return lines.join('\n');
+};
+
 const createBill = async (req, res) => {
   try {
     const requestItems = Array.isArray(req.body.items) ? req.body.items : [];
     const taxRate = Math.max(toNumber(req.body.taxRate, 0.05), 0);
+    const customerMobile = normalizeMobile(req.body.customerMobile);
 
     if (requestItems.length === 0) {
       return res.status(400).json({
@@ -41,27 +71,55 @@ const createBill = async (req, res) => {
       });
     }
 
+    if (!isValidCustomerMobile(customerMobile)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid 10-digit customer mobile number',
+      });
+    }
+
+    const productIds = requestItems
+      .map((item) => item.productId)
+      .filter(Boolean);
+    const barcodes = requestItems
+      .map((item) => sanitizeBarcode(item.barcode))
+      .filter(Boolean);
+
+    const lookupFilters = [
+      productIds.length ? { _id: { $in: productIds } } : null,
+      barcodes.length ? { barcode: { $in: barcodes } } : null,
+    ].filter(Boolean);
+
+    const matchedProducts = lookupFilters.length
+      ? await Product.find({
+          user: req.user._id,
+          $or: lookupFilters,
+        })
+      : [];
+
+    const productsById = new Map(
+      matchedProducts.map((product) => [product._id.toString(), product])
+    );
+    const productsByBarcode = new Map(
+      matchedProducts
+        .filter((product) => product.barcode)
+        .map((product) => [product.barcode, product])
+    );
+
     const billItems = [];
+    const touchedProducts = new Map();
 
     for (const item of requestItems) {
       const quantity = Math.max(toNumber(item.quantity || item.qty, 1), 1);
-      let product = null;
-
-      if (item.productId) {
-        product = await Product.findOne({
-          _id: item.productId,
-          user: req.user._id,
-        });
-      } else if (item.barcode) {
-        const normalizedBarcode = sanitizeBarcode(item.barcode);
-        product = await Product.findOne({
-          barcode: normalizedBarcode,
-          user: req.user._id,
-        });
-      }
+      const normalizedBarcode = sanitizeBarcode(item.barcode);
+      const product = item.productId
+        ? productsById.get(String(item.productId))
+        : normalizedBarcode
+        ? productsByBarcode.get(normalizedBarcode)
+        : null;
 
       const name = product?.name || item.name;
-      const barcode = product?.barcode || sanitizeBarcode(item.barcode) || '';
+      const barcode = product?.barcode || normalizedBarcode || '';
       const price = Math.max(toNumber(item.price, product?.price || 0), 0);
       console.log('Billing item lookup:', { name, barcode, quantity, price, found: Boolean(product) });
 
@@ -92,10 +150,18 @@ const createBill = async (req, res) => {
 
       if (product) {
         product.quantity = Math.max(product.quantity - quantity, 0);
-        await product.save();
-        await createLowStockNotification(req.user, product);
+        touchedProducts.set(product._id.toString(), product);
       }
     }
+
+    const updatedProducts = Array.from(touchedProducts.values());
+
+    await Promise.all(updatedProducts.map((product) => product.save()));
+    Promise.all(
+      updatedProducts.map((product) => createLowStockNotification(req.user, product))
+    ).catch((error) => {
+      console.error('Low stock notification failed:', error.message);
+    });
 
     const subtotal = billItems.reduce((sum, item) => sum + item.lineTotal, 0);
     const tax = subtotal * taxRate;
@@ -111,10 +177,50 @@ const createBill = async (req, res) => {
       status: 'completed',
     });
 
+    const billMessage = buildBillMessage(bill);
+    const whatsappConfig = getWhatsAppConfig();
+    const whatsappTargets = [
+      { recipient: 'customer', mobile: customerMobile },
+      { recipient: 'owner', mobile: whatsappConfig.ownerNumber },
+    ];
+
+    const whatsappResults = await Promise.all(
+      whatsappTargets.map(async (target) => {
+        if (!target.mobile) {
+          return {
+            recipient: target.recipient,
+            mobile: '',
+            sent: false,
+            provider: whatsappConfig.provider,
+            error:
+              target.recipient === 'owner'
+                ? 'Owner WhatsApp number not configured'
+                : 'Customer mobile number is missing or invalid',
+          };
+        }
+
+        const result = await sendWhatsAppMessage(target.mobile, billMessage);
+        return {
+          recipient: target.recipient,
+          mobile: target.mobile,
+          ...result,
+        };
+      })
+    );
+
+    const successfulRecipients = whatsappResults.filter((item) => item.sent);
+    const failedRecipients = whatsappResults.filter((item) => !item.sent);
+
     return res.status(201).json({
       success: true,
       message: 'Bill created successfully',
       bill,
+      whatsapp: {
+        attempted: true,
+        results: whatsappResults,
+        allSent: failedRecipients.length === 0,
+        anySent: successfulRecipients.length > 0,
+      },
     });
   } catch (error) {
     return res.status(500).json({

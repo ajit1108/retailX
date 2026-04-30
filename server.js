@@ -17,6 +17,7 @@ const dashboardRoutes = require('./routes/dashboardRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const billRoutes = require('./routes/billRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
+const whatsappRoutes = require('./routes/whatsappRoutes');
 
 dotenv.config();
 validateEnv();
@@ -37,6 +38,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/bills', billRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/send-whatsapp', whatsappRoutes);
 
 app.get('/', (req, res) => {
   res.json({

@@ -90,5 +90,6 @@ productSchema.index(
 );
 productSchema.index({ user: 1, normalizedName: 1 });
 productSchema.index({ user: 1, category: 1, createdAt: 1 });
+productSchema.index({ user: 1, quantity: 1, createdAt: 1 });
 
 module.exports = mongoose.model('Product', productSchema);
